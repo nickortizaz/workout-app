@@ -120,6 +120,7 @@ export default function App() {
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
+  const [saveError, setSaveError] = useState(null);
   const saveTimer = useRef(null);
 
   const storageKey = `pr_workout:${selectedDay}:${today}`;
@@ -163,7 +164,7 @@ export default function App() {
   const progress = totalSets ? Math.round((completedSets / totalSets) * 100) : 0;
 
   async function saveToNotion() {
-    setSaving(true); setSaveStatus(null);
+    setSaving(true); setSaveStatus(null); setSaveError(null);
     const dateLabel = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     const sessionName = `${workout.name} — ${dateLabel}`;
 
@@ -173,7 +174,7 @@ export default function App() {
       const filled = exSets.filter(s => s && (s.weight || s.reps));
       if (!filled.length) return;
       exerciseText += `${ex.name} (${ex.reps}): `;
-      exerciseText += filled.map((s, i) => `Set ${i + 1}: ${s.weight || "—"} lbs × ${s.reps || "—"}`).join(" | ");
+      exerciseText += filled.map((s, i) => `Set ${i + 1}: ${s.weight || "—"} lbs x ${s.reps || "—"}`).join(" | ");
       exerciseText += "\n";
     });
 
@@ -191,8 +192,17 @@ export default function App() {
           exerciseText,
         }),
       });
-      setSaveStatus(res.ok ? "success" : "error");
-    } catch { setSaveStatus("error"); }
+      const data = await res.json();
+      if (res.ok) {
+        setSaveStatus("success");
+      } else {
+        setSaveStatus("error");
+        setSaveError(data.error || `Error ${res.status}`);
+      }
+    } catch (err) {
+      setSaveStatus("error");
+      setSaveError(err.message || "Network error — check connection");
+    }
     setSaving(false);
   }
 
@@ -340,17 +350,24 @@ export default function App() {
       </div>
 
       {/* Bottom Bar */}
-      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, padding: "12px 16px", background: "#080808", borderTop: "1px solid #333", display: "flex", gap: 10, alignItems: "center", maxWidth: 480, margin: "0 auto" }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: "#aaa", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{progress}%</div>
-        <button onClick={saveToNotion} disabled={saving} style={{
-          flex: 1, background: saving ? "#2a0a0a" : saveStatus === "success" ? "#0a2a0a" : "#e8192c",
-          borderRadius: 10, border: "none",
-          color: saving ? "#888" : saveStatus === "success" ? "#4caf50" : "#fff",
-          fontSize: 13, fontWeight: 900, letterSpacing: "0.08em", padding: "15px 0",
-          cursor: saving ? "not-allowed" : "pointer", transition: "all 0.2s", fontFamily: "inherit"
-        }}>
-          {saving ? "SAVING..." : saveStatus === "success" ? "✓ SAVED TO NOTION" : saveStatus === "error" ? "RETRY SAVE" : "SAVE TO NOTION"}
-        </button>
+      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#080808", borderTop: "1px solid #333", maxWidth: 480, margin: "0 auto" }}>
+        {saveError && (
+          <div style={{ padding: "8px 16px", fontSize: 11, color: "#e8192c", fontWeight: 600, letterSpacing: "0.04em", borderBottom: "1px solid #1a1a1a" }}>
+            {saveError}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "12px 16px" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#aaa", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{progress}%</div>
+          <button onClick={saveToNotion} disabled={saving} style={{
+            flex: 1, background: saving ? "#2a0a0a" : saveStatus === "success" ? "#0a2a0a" : "#e8192c",
+            borderRadius: 10, border: "none",
+            color: saving ? "#888" : saveStatus === "success" ? "#4caf50" : "#fff",
+            fontSize: 13, fontWeight: 900, letterSpacing: "0.08em", padding: "15px 0",
+            cursor: saving ? "not-allowed" : "pointer", transition: "all 0.2s", fontFamily: "inherit"
+          }}>
+            {saving ? "SAVING..." : saveStatus === "success" ? "✓ SAVED TO NOTION" : saveStatus === "error" ? "RETRY — TAP TO SEE ERROR" : "SAVE TO NOTION"}
+          </button>
+        </div>
       </div>
     </div>
   );
