@@ -96,23 +96,27 @@ const PROGRAM = [
 const ENERGY_LABELS = { 5: "LOCKED IN", 4: "GOOD", 3: "SOLID", 2: "LOW", 1: "ROUGH" };
 const ENERGY_NOTION = { 5: "5 — Locked In", 4: "4 — Good", 3: "3 — Solid", 2: "2 — Low", 1: "1 — Rough" };
 const ENERGY_COLORS = { 1: "#e8192c", 2: "#ff6b2b", 3: "#f5c842", 4: "#4fc3f7", 5: "#4caf50" };
+const DAY_COLORS = { Push: "#e8192c", Pull: "#4fc3f7", Legs: "#4caf50", Upper: "#a855f7", "Active Recovery": "#555" };
 
 const today = new Date().toISOString().split("T")[0];
 const todayDow = new Date().getDay();
 const DOW_MAP = [6, 0, 1, 2, 3, 4, 5];
 
-function loadFromStorage(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-}
+// LocalStorage helpers
+const getLS = (key) => { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : null; } catch { return null; } };
+const setLS = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
 
-function saveToStorage(key, data) {
-  try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
-}
+// Volume calc
+const calcVolume = (sets) => {
+  let v = 0;
+  Object.values(sets).forEach(exSets => exSets?.forEach(s => {
+    if (s?.weight && s?.reps) v += parseFloat(s.weight) * parseFloat(s.reps);
+  }));
+  return Math.round(v);
+};
 
 export default function App() {
+  const [tab, setTab] = useState("train");
   const [selectedDay, setSelectedDay] = useState(DOW_MAP[todayDow]);
   const [sets, setSets] = useState({});
   const [energy, setEnergy] = useState(0);
@@ -121,25 +125,38 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
   const [saveError, setSaveError] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [expandedHistory, setExpandedHistory] = useState(null);
+  const [lastSession, setLastSession] = useState({});
   const saveTimer = useRef(null);
 
   const storageKey = `pr_workout:${selectedDay}:${today}`;
 
+  // Load history
   useEffect(() => {
-    setSaveStatus(null);
-    const d = loadFromStorage(storageKey);
-    if (d) {
-      setSets(d.sets || {}); setEnergy(d.energy || 0);
-      setBodyweight(d.bodyweight || ""); setNotes(d.notes || "");
+    const h = getLS("session_history") || [];
+    setHistory(h.sort((a, b) => new Date(b.date) - new Date(a.date)));
+  }, []);
+
+  // Load session + last session on day change
+  useEffect(() => {
+    setSaveStatus(null); setSaveError(null);
+    const saved = getLS(storageKey);
+    if (saved) {
+      setSets(saved.sets || {}); setEnergy(saved.energy || 0);
+      setBodyweight(saved.bodyweight || ""); setNotes(saved.notes || "");
     } else {
       setSets({}); setEnergy(0); setBodyweight(""); setNotes("");
     }
+    // Load last session for this day
+    const last = getLS(`last_session:${selectedDay}`);
+    setLastSession(last?.sets || {});
   }, [selectedDay, storageKey]);
 
   const persist = useCallback((s, e, bw, n) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveToStorage(storageKey, { sets: s, energy: e, bodyweight: bw, notes: n });
+      setLS(storageKey, { sets: s, energy: e, bodyweight: bw, notes: n });
     }, 400);
   }, [storageKey]);
 
@@ -154,14 +171,23 @@ export default function App() {
     });
   };
 
-  const handleEnergy = (val) => { setEnergy(val); persist(sets, val, bodyweight, notes); };
-  const handleBW = (val) => { setBodyweight(val); persist(sets, energy, val, notes); };
-  const handleNotes = (val) => { setNotes(val); persist(sets, energy, bodyweight, val); };
+  const handleEnergy = (v) => { setEnergy(v); persist(sets, v, bodyweight, notes); };
+  const handleBW = (v) => { setBodyweight(v); persist(sets, energy, v, notes); };
+  const handleNotes = (v) => { setNotes(v); persist(sets, energy, bodyweight, v); };
 
   const workout = PROGRAM[selectedDay];
   const completedSets = Object.values(sets).flat().filter(s => s && (s.weight || s.reps)).length;
-  const totalSets = workout.exercises.reduce((acc, ex) => acc + ex.sets, 0);
+  const totalSets = workout.exercises.reduce((a, e) => a + e.sets, 0);
   const progress = totalSets ? Math.round((completedSets / totalSets) * 100) : 0;
+
+  const getLastForExercise = (exName) => {
+    const exSets = lastSession[exName];
+    if (!exSets || !exSets.length) return null;
+    const filled = exSets.filter(s => s?.weight && s?.reps);
+    if (!filled.length) return null;
+    const best = filled.reduce((b, s) => parseFloat(s.weight) > parseFloat(b.weight) ? s : b, filled[0]);
+    return `${best.weight} × ${best.reps}`;
+  };
 
   async function saveToNotion() {
     setSaving(true); setSaveStatus(null); setSaveError(null);
@@ -173,8 +199,8 @@ export default function App() {
       const exSets = sets[ex.name] || [];
       const filled = exSets.filter(s => s && (s.weight || s.reps));
       if (!filled.length) return;
-      exerciseText += `${ex.name} (${ex.reps}): `;
-      exerciseText += filled.map((s, i) => `Set ${i + 1}: ${s.weight || "—"} lbs x ${s.reps || "—"}`).join(" | ");
+      exerciseText += `${ex.name}: `;
+      exerciseText += filled.map((s, i) => `Set ${i+1}: ${s.weight||"—"} × ${s.reps||"—"}`).join(" | ");
       exerciseText += "\n";
     });
 
@@ -183,192 +209,290 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionName,
-          dayType: workout.dayType,
-          date: today,
+          sessionName, dayType: workout.dayType, date: today,
           energy: energy ? ENERGY_NOTION[energy] : null,
-          bodyweight: bodyweight || null,
-          notes: notes || null,
-          exerciseText,
+          bodyweight: bodyweight || null, notes: notes || null, exerciseText,
         }),
       });
       const data = await res.json();
       if (res.ok) {
         setSaveStatus("success");
+        // Save to localStorage history
+        const volume = calcVolume(sets);
+        const entry = { date: today, dayIndex: selectedDay, dayType: workout.dayType, name: workout.name, sessionName, energy, bodyweight, notes, sets, volume };
+        setLS(`last_session:${selectedDay}`, entry);
+        setLastSession(sets);
+        const h = getLS("session_history") || [];
+        const updated = [entry, ...h.filter(x => !(x.date === today && x.dayIndex === selectedDay))].slice(0, 100);
+        setLS("session_history", updated);
+        setHistory(updated);
       } else {
         setSaveStatus("error");
         setSaveError(data.error || `Error ${res.status}`);
       }
     } catch (err) {
       setSaveStatus("error");
-      setSaveError(err.message || "Network error — check connection");
+      setSaveError(err.message || "Network error");
     }
     setSaving(false);
   }
 
-  return (
-    <div style={{ background: "#080808", minHeight: "100vh", minHeight: "100dvh", fontFamily: "'Inter', system-ui, sans-serif", color: "#fff", maxWidth: 480, margin: "0 auto", paddingBottom: 120 }}>
+  // ─────────────────────────────────────────────────────────────────────────
+  // HISTORY TAB
+  // ─────────────────────────────────────────────────────────────────────────
+  const HistoryTab = () => {
+    const grouped = {};
+    history.forEach(s => {
+      const label = new Date(s.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+      if (!grouped[label]) grouped[label] = [];
+      grouped[label].push(s);
+    });
 
-      {/* Day Bar */}
-      <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "20px 16px 0", scrollbarWidth: "none" }}>
-        {PROGRAM.map((w, i) => (
-          <button key={i} onClick={() => setSelectedDay(i)} style={{
-            flexShrink: 0, padding: "8px 16px", borderRadius: 6, cursor: "pointer",
-            fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", border: "1px solid",
-            background: i === selectedDay ? "#e8192c" : "transparent",
-            borderColor: i === selectedDay ? "#e8192c" : "#444",
-            color: i === selectedDay ? "#fff" : "#bbb", transition: "all 0.15s"
-          }}>{w.day}</button>
-        ))}
+    if (history.length === 0) return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "60vh", gap: 12 }}>
+        <div style={{ fontSize: 40 }}>📋</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>No sessions yet</div>
+        <div style={{ fontSize: 13, color: "#555", textAlign: "center", maxWidth: 240 }}>Complete and save your first workout to see history here.</div>
       </div>
+    );
 
-      {/* Header */}
-      <div style={{ padding: "20px 16px 0" }}>
-        <h1 style={{ fontSize: 34, fontWeight: 900, letterSpacing: "-0.02em", lineHeight: 1.1, margin: 0 }}>{workout.name}</h1>
-        <div style={{ fontSize: 13, color: "#aaa", marginTop: 6 }}>{workout.focus}</div>
-        <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-          {workout.tags?.map(t => (
-            <span key={t} style={{
-              fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", padding: "4px 10px",
-              borderRadius: 4, border: `1px solid ${t === "NO YOHIMBINE" ? "#e8192c" : "#555"}`,
-              color: t === "NO YOHIMBINE" ? "#e8192c" : "#ccc"
-            }}>{t}</span>
-          ))}
-        </div>
-      </div>
-
-      {!workout.recovery && (
-        <>
-          {/* Progress */}
-          <div style={{ margin: "18px 16px 0", height: 3, background: "#2a2a2a", borderRadius: 2 }}>
-            <div style={{ height: "100%", background: "#e8192c", borderRadius: 2, transition: "width 0.3s", width: `${progress}%` }} />
-          </div>
-          <div style={{ fontSize: 12, color: "#aaa", padding: "6px 16px 0", fontWeight: 600, letterSpacing: "0.06em" }}>
-            {completedSets} / {totalSets} SETS LOGGED — {progress}%
-          </div>
-
-          {/* Meta */}
-          <div style={{ display: "flex", gap: 10, padding: "14px 16px 0" }}>
-            <div style={{ flex: 1, background: "#141414", borderRadius: 10, padding: 14, border: "1px solid #333" }}>
-              <div style={{ fontSize: 10, color: "#aaa", letterSpacing: "0.1em", fontWeight: 700, marginBottom: 8 }}>BODYWEIGHT</div>
-              <input type="text" inputMode="decimal" placeholder="—" value={bodyweight}
-                onChange={e => handleBW(e.target.value)}
-                style={{ background: "transparent", border: "none", outline: "none", color: "#fff", fontSize: 26, fontWeight: 800, width: "100%", fontFamily: "inherit" }} />
-              <div style={{ fontSize: 11, color: "#888", marginTop: 2, fontWeight: 600 }}>LBS</div>
-            </div>
-            <div style={{ flex: 1, background: "#141414", borderRadius: 10, padding: 14, border: "1px solid #333" }}>
-              <div style={{ fontSize: 10, color: "#aaa", letterSpacing: "0.1em", fontWeight: 700, marginBottom: 8 }}>ENERGY</div>
-              <div style={{ display: "flex", gap: 5 }}>
-                {[1, 2, 3, 4, 5].map(v => (
-                  <button key={v} onClick={() => handleEnergy(v)} style={{
-                    flex: 1, height: 32, borderRadius: 6, cursor: "pointer", border: "1px solid",
-                    background: energy === v ? ENERGY_COLORS[v] : "transparent",
-                    borderColor: energy === v ? ENERGY_COLORS[v] : "#444",
-                    color: energy === v ? "#fff" : "#bbb",
-                    fontSize: 12, fontWeight: 800, transition: "all 0.15s"
-                  }}>{v}</button>
-                ))}
-              </div>
-              {energy > 0 && <div style={{ fontSize: 11, color: ENERGY_COLORS[energy], marginTop: 7, fontWeight: 700, letterSpacing: "0.06em" }}>{ENERGY_LABELS[energy]}</div>}
-            </div>
-          </div>
-
-          {/* Exercises */}
-          <div style={{ padding: "14px 16px 0" }}>
-            {workout.exercises.map(ex => {
-              const exSets = sets[ex.name] || [];
-              const filled = exSets.filter(s => s && (s.weight || s.reps)).length;
-              const done = filled >= ex.sets;
-              const started = filled > 0 && !done;
+    return (
+      <div style={{ padding: "16px 16px 0" }}>
+        {Object.entries(grouped).map(([date, sessions]) => (
+          <div key={date} style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: "#555", letterSpacing: "0.1em", marginBottom: 10 }}>{date.toUpperCase()}</div>
+            {sessions.map((s, idx) => {
+              const key = `${s.date}-${s.dayIndex}`;
+              const expanded = expandedHistory === key;
+              const color = DAY_COLORS[s.dayType] || "#555";
               return (
-                <div key={ex.name} style={{
-                  background: "#111", borderRadius: 10, marginBottom: 10,
-                  border: "1px solid #333",
-                  borderLeft: `4px solid ${done ? "#4caf50" : started ? "#e8192c" : "#333"}`,
-                  overflow: "hidden"
-                }}>
-                  <div style={{ padding: "12px 14px 8px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 15, fontWeight: 800 }}>{ex.name}</span>
-                      {ex.heavy && <span style={{ fontSize: 9, fontWeight: 900, letterSpacing: "0.1em", color: "#e8192c", border: "1px solid #e8192c", borderRadius: 4, padding: "2px 7px" }}>HEAVY</span>}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#bbb", marginTop: 4, fontWeight: 600 }}>
-                      {ex.sets} sets · {ex.reps} reps · <span style={{ color: done ? "#4caf50" : "#fff" }}>{filled}/{ex.sets} done</span>
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 10px 6px" }}>
-                    <div style={{ width: 20, flexShrink: 0 }} />
-                    <div style={{ flex: 1, fontSize: 10, color: "#888", textAlign: "center", fontWeight: 800, letterSpacing: "0.08em" }}>WEIGHT (LBS)</div>
-                    <div style={{ width: 18, flexShrink: 0, textAlign: "center", color: "#888", fontSize: 13, fontWeight: 700 }}>×</div>
-                    <div style={{ flex: 1, fontSize: 10, color: "#888", textAlign: "center", fontWeight: 800, letterSpacing: "0.08em" }}>REPS</div>
-                  </div>
-
-                  <div style={{ padding: "0 10px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
-                    {Array.from({ length: ex.sets }).map((_, si) => {
-                      const set = exSets[si] || { weight: "", reps: "" };
-                      const setDone = set.weight && set.reps;
-                      return (
-                        <div key={si} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <div style={{ width: 20, flexShrink: 0, fontSize: 12, color: setDone ? "#4caf50" : "#999", fontWeight: 800, textAlign: "center" }}>
-                            {setDone ? "✓" : si + 1}
-                          </div>
-                          <input type="text" inputMode="decimal" placeholder="—"
-                            value={set.weight || ""}
-                            onChange={e => updateSet(ex.name, si, "weight", e.target.value)}
-                            style={{ flex: 1, minWidth: 0, background: set.weight ? "#1e1e1e" : "#161616", border: `1px solid ${set.weight ? "#555" : "#333"}`, borderRadius: 8, padding: "10px 4px", color: "#fff", fontSize: 16, fontWeight: 700, outline: "none", textAlign: "center", fontFamily: "inherit", boxSizing: "border-box" }}
-                          />
-                          <div style={{ width: 18, flexShrink: 0, textAlign: "center", color: "#fff", fontSize: 16, fontWeight: 700 }}>×</div>
-                          <input type="text" inputMode="numeric" placeholder="—"
-                            value={set.reps || ""}
-                            onChange={e => updateSet(ex.name, si, "reps", e.target.value)}
-                            style={{ flex: 1, minWidth: 0, background: set.reps ? "#1e1e1e" : "#161616", border: `1px solid ${set.reps ? "#555" : "#333"}`, borderRadius: 8, padding: "10px 4px", color: "#fff", fontSize: 16, fontWeight: 700, outline: "none", textAlign: "center", fontFamily: "inherit", boxSizing: "border-box" }}
-                          />
+                <div key={idx} style={{ background: "#111", borderRadius: 12, marginBottom: 10, border: "1px solid #222", borderLeft: `4px solid ${color}`, overflow: "hidden" }}>
+                  <div onClick={() => setExpandedHistory(expanded ? null : key)} style={{ padding: "14px 14px", cursor: "pointer" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 800 }}>{s.name}</div>
+                        <div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>
+                          {s.volume ? `${s.volume.toLocaleString()} lbs total volume` : "Recovery day"}
+                          {s.bodyweight ? ` · ${s.bodyweight} lbs BW` : ""}
                         </div>
-                      );
-                    })}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {s.energy > 0 && (
+                          <div style={{ width: 28, height: 28, borderRadius: 6, background: ENERGY_COLORS[s.energy], display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800 }}>{s.energy}</div>
+                        )}
+                        <div style={{ color: "#555", fontSize: 16 }}>{expanded ? "▲" : "▼"}</div>
+                      </div>
+                    </div>
                   </div>
+                  {expanded && s.sets && (
+                    <div style={{ borderTop: "1px solid #1a1a1a", padding: "12px 14px" }}>
+                      {Object.entries(s.sets).map(([exName, exSets]) => {
+                        const filled = (exSets || []).filter(st => st && (st.weight || st.reps));
+                        if (!filled.length) return null;
+                        return (
+                          <div key={exName} style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#bbb", marginBottom: 4 }}>{exName}</div>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              {filled.map((st, i) => (
+                                <div key={i} style={{ background: "#1a1a1a", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600, color: "#fff" }}>
+                                  {st.weight || "—"} × {st.reps || "—"}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {s.notes && <div style={{ fontSize: 12, color: "#666", marginTop: 8, fontStyle: "italic" }}>{s.notes}</div>}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
+        ))}
+      </div>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────────────────
+  return (
+    <div style={{ background: "#080808", minHeight: "100dvh", fontFamily: "'Inter', system-ui, sans-serif", color: "#fff", maxWidth: 480, margin: "0 auto", paddingBottom: tab === "train" ? 120 : 80 }}>
+
+      {tab === "train" && (
+        <>
+          {/* Day Bar */}
+          <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "20px 16px 0", scrollbarWidth: "none" }}>
+            {PROGRAM.map((w, i) => (
+              <button key={i} onClick={() => setSelectedDay(i)} style={{
+                flexShrink: 0, padding: "8px 16px", borderRadius: 6, cursor: "pointer",
+                fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", border: "1px solid",
+                background: i === selectedDay ? "#e8192c" : "transparent",
+                borderColor: i === selectedDay ? "#e8192c" : "#444",
+                color: i === selectedDay ? "#fff" : "#bbb", transition: "all 0.15s"
+              }}>{w.day}</button>
+            ))}
+          </div>
+
+          {/* Header */}
+          <div style={{ padding: "20px 16px 0" }}>
+            <h1 style={{ fontSize: 34, fontWeight: 900, letterSpacing: "-0.02em", lineHeight: 1.1, margin: 0 }}>{workout.name}</h1>
+            <div style={{ fontSize: 13, color: "#aaa", marginTop: 6 }}>{workout.focus}</div>
+            <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+              {workout.tags?.map(t => (
+                <span key={t} style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", padding: "4px 10px", borderRadius: 4, border: `1px solid ${t === "NO YOHIMBINE" ? "#e8192c" : "#555"}`, color: t === "NO YOHIMBINE" ? "#e8192c" : "#ccc" }}>{t}</span>
+              ))}
+            </div>
+          </div>
+
+          {!workout.recovery && (
+            <>
+              {/* Progress */}
+              <div style={{ margin: "18px 16px 0", height: 3, background: "#2a2a2a", borderRadius: 2 }}>
+                <div style={{ height: "100%", background: "#e8192c", borderRadius: 2, transition: "width 0.3s", width: `${progress}%` }} />
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa", padding: "6px 16px 0", fontWeight: 600, letterSpacing: "0.06em" }}>
+                {completedSets} / {totalSets} SETS — {progress}%
+              </div>
+
+              {/* Meta */}
+              <div style={{ display: "flex", gap: 10, padding: "14px 16px 0" }}>
+                <div style={{ flex: 1, background: "#141414", borderRadius: 10, padding: 14, border: "1px solid #333" }}>
+                  <div style={{ fontSize: 10, color: "#aaa", letterSpacing: "0.1em", fontWeight: 700, marginBottom: 8 }}>BODYWEIGHT</div>
+                  <input type="text" inputMode="decimal" placeholder="—" value={bodyweight} onChange={e => handleBW(e.target.value)}
+                    style={{ background: "transparent", border: "none", outline: "none", color: "#fff", fontSize: 26, fontWeight: 800, width: "100%", fontFamily: "inherit" }} />
+                  <div style={{ fontSize: 11, color: "#888", marginTop: 2, fontWeight: 600 }}>LBS</div>
+                </div>
+                <div style={{ flex: 1, background: "#141414", borderRadius: 10, padding: 14, border: "1px solid #333" }}>
+                  <div style={{ fontSize: 10, color: "#aaa", letterSpacing: "0.1em", fontWeight: 700, marginBottom: 8 }}>ENERGY</div>
+                  <div style={{ display: "flex", gap: 5 }}>
+                    {[1,2,3,4,5].map(v => (
+                      <button key={v} onClick={() => handleEnergy(v)} style={{ flex: 1, height: 32, borderRadius: 6, cursor: "pointer", border: "1px solid", background: energy === v ? ENERGY_COLORS[v] : "transparent", borderColor: energy === v ? ENERGY_COLORS[v] : "#444", color: energy === v ? "#fff" : "#bbb", fontSize: 12, fontWeight: 800, transition: "all 0.15s" }}>{v}</button>
+                    ))}
+                  </div>
+                  {energy > 0 && <div style={{ fontSize: 11, color: ENERGY_COLORS[energy], marginTop: 7, fontWeight: 700, letterSpacing: "0.06em" }}>{ENERGY_LABELS[energy]}</div>}
+                </div>
+              </div>
+
+              {/* Exercises */}
+              <div style={{ padding: "14px 16px 0" }}>
+                {workout.exercises.map(ex => {
+                  const exSets = sets[ex.name] || [];
+                  const filled = exSets.filter(s => s && (s.weight || s.reps)).length;
+                  const done = filled >= ex.sets;
+                  const started = filled > 0 && !done;
+                  const lastBest = getLastForExercise(ex.name);
+                  return (
+                    <div key={ex.name} style={{ background: "#111", borderRadius: 10, marginBottom: 10, border: "1px solid #333", borderLeft: `4px solid ${done ? "#4caf50" : started ? "#e8192c" : "#333"}`, overflow: "hidden" }}>
+                      <div style={{ padding: "12px 14px 8px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 15, fontWeight: 800 }}>{ex.name}</span>
+                          {ex.heavy && <span style={{ fontSize: 9, fontWeight: 900, letterSpacing: "0.1em", color: "#e8192c", border: "1px solid #e8192c", borderRadius: 4, padding: "2px 7px" }}>HEAVY</span>}
+                        </div>
+                        <div style={{ fontSize: 12, color: "#bbb", marginTop: 3, fontWeight: 600 }}>
+                          {ex.sets} sets · {ex.reps} reps · <span style={{ color: done ? "#4caf50" : "#fff" }}>{filled}/{ex.sets} done</span>
+                          {lastBest && <span style={{ color: "#555", marginLeft: 8 }}>· Last: {lastBest}</span>}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 10px 6px" }}>
+                        <div style={{ width: 20, flexShrink: 0 }} />
+                        <div style={{ flex: 1, fontSize: 10, color: "#888", textAlign: "center", fontWeight: 800, letterSpacing: "0.08em" }}>WEIGHT (LBS)</div>
+                        <div style={{ width: 18, flexShrink: 0, textAlign: "center", color: "#888", fontSize: 13, fontWeight: 700 }}>×</div>
+                        <div style={{ flex: 1, fontSize: 10, color: "#888", textAlign: "center", fontWeight: 800, letterSpacing: "0.08em" }}>REPS</div>
+                      </div>
+
+                      <div style={{ padding: "0 10px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
+                        {Array.from({ length: ex.sets }).map((_, si) => {
+                          const set = exSets[si] || { weight: "", reps: "" };
+                          const lastSet = lastSession[ex.name]?.[si];
+                          const setDone = set.weight && set.reps;
+                          return (
+                            <div key={si} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ width: 20, flexShrink: 0, fontSize: 12, color: setDone ? "#4caf50" : "#999", fontWeight: 800, textAlign: "center" }}>
+                                {setDone ? "✓" : si + 1}
+                              </div>
+                              <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
+                                <input type="text" inputMode="decimal"
+                                  placeholder={lastSet?.weight ? lastSet.weight : "—"}
+                                  value={set.weight || ""}
+                                  onChange={e => updateSet(ex.name, si, "weight", e.target.value)}
+                                  style={{ width: "100%", background: set.weight ? "#1e1e1e" : "#161616", border: `1px solid ${set.weight ? "#555" : "#333"}`, borderRadius: 8, padding: "10px 4px", color: "#fff", fontSize: 16, fontWeight: 700, outline: "none", textAlign: "center", fontFamily: "inherit", boxSizing: "border-box" }}
+                                />
+                              </div>
+                              <div style={{ width: 18, flexShrink: 0, textAlign: "center", color: "#fff", fontSize: 16, fontWeight: 700 }}>×</div>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <input type="text" inputMode="numeric"
+                                  placeholder={lastSet?.reps ? lastSet.reps : "—"}
+                                  value={set.reps || ""}
+                                  onChange={e => updateSet(ex.name, si, "reps", e.target.value)}
+                                  style={{ width: "100%", background: set.reps ? "#1e1e1e" : "#161616", border: `1px solid ${set.reps ? "#555" : "#333"}`, borderRadius: 8, padding: "10px 4px", color: "#fff", fontSize: 16, fontWeight: 700, outline: "none", textAlign: "center", fontFamily: "inherit", boxSizing: "border-box" }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {workout.recovery && (
+            <div style={{ margin: "24px 16px 0", background: "#111", borderRadius: 12, border: "1px solid #333", padding: 32, textAlign: "center" }}>
+              <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: "0.06em", color: "#555" }}>REST & RECOVER</div>
+              <div style={{ fontSize: 14, color: "#aaa", marginTop: 14, lineHeight: 1.8 }}>No lifting. No pump work.<br />Cardio only + Cold Plunge.<br />Growth happens here.</div>
+            </div>
+          )}
+
+          {/* Notes */}
+          <div style={{ padding: "14px 16px 0" }}>
+            <textarea rows={3} placeholder="Session notes..." value={notes} onChange={e => handleNotes(e.target.value)}
+              style={{ width: "100%", background: "#111", border: "1px solid #333", borderRadius: 10, padding: 14, color: "#fff", fontSize: 14, outline: "none", resize: "none", fontFamily: "inherit", boxSizing: "border-box", lineHeight: 1.6 }} />
+          </div>
+
+          {/* Bottom Bar */}
+          <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#080808", borderTop: "1px solid #222", maxWidth: 480, margin: "0 auto" }}>
+            {saveError && <div style={{ padding: "8px 16px", fontSize: 11, color: "#e8192c", fontWeight: 600, borderBottom: "1px solid #1a1a1a" }}>{saveError}</div>}
+            <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "10px 16px" }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#aaa", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{progress}%</div>
+              <button onClick={saveToNotion} disabled={saving} style={{
+                flex: 1, background: saving ? "#2a0a0a" : saveStatus === "success" ? "#0a2a0a" : "#e8192c",
+                borderRadius: 10, border: "none", color: saving ? "#888" : saveStatus === "success" ? "#4caf50" : "#fff",
+                fontSize: 13, fontWeight: 900, letterSpacing: "0.08em", padding: "14px 0",
+                cursor: saving ? "not-allowed" : "pointer", transition: "all 0.2s", fontFamily: "inherit"
+              }}>
+                {saving ? "SAVING..." : saveStatus === "success" ? "✓ SAVED" : saveStatus === "error" ? "RETRY SAVE" : "SAVE TO NOTION"}
+              </button>
+            </div>
+            {/* Tab Bar */}
+            <div style={{ display: "flex", borderTop: "1px solid #1a1a1a" }}>
+              <button onClick={() => setTab("train")} style={{ flex: 1, padding: "10px 0 14px", background: "transparent", border: "none", color: tab === "train" ? "#e8192c" : "#555", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit" }}>TRAIN</button>
+              <button onClick={() => setTab("history")} style={{ flex: 1, padding: "10px 0 14px", background: "transparent", border: "none", color: tab === "history" ? "#e8192c" : "#555", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit" }}>HISTORY</button>
+            </div>
+          </div>
         </>
       )}
 
-      {workout.recovery && (
-        <div style={{ margin: "24px 16px 0", background: "#111", borderRadius: 12, border: "1px solid #333", padding: 32, textAlign: "center" }}>
-          <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: "0.06em", color: "#555" }}>REST & RECOVER</div>
-          <div style={{ fontSize: 14, color: "#aaa", marginTop: 14, lineHeight: 1.8 }}>No lifting. No pump work.<br />Cardio only + Cold Plunge.<br />Growth happens here.</div>
-        </div>
-      )}
-
-      {/* Notes */}
-      <div style={{ padding: "14px 16px 0" }}>
-        <textarea rows={3} placeholder="Session notes..." value={notes}
-          onChange={e => handleNotes(e.target.value)}
-          style={{ width: "100%", background: "#111", border: "1px solid #333", borderRadius: 10, padding: 14, color: "#fff", fontSize: 14, outline: "none", resize: "none", fontFamily: "inherit", boxSizing: "border-box", lineHeight: 1.6 }} />
-      </div>
-
-      {/* Bottom Bar */}
-      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#080808", borderTop: "1px solid #333", maxWidth: 480, margin: "0 auto" }}>
-        {saveError && (
-          <div style={{ padding: "8px 16px", fontSize: 11, color: "#e8192c", fontWeight: 600, letterSpacing: "0.04em", borderBottom: "1px solid #1a1a1a" }}>
-            {saveError}
+      {tab === "history" && (
+        <>
+          <div style={{ padding: "24px 16px 0" }}>
+            <h1 style={{ fontSize: 28, fontWeight: 900, margin: 0, letterSpacing: "-0.02em" }}>HISTORY</h1>
+            <div style={{ fontSize: 13, color: "#555", marginTop: 4 }}>{history.length} sessions logged</div>
           </div>
-        )}
-        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "12px 16px" }}>
-          <div style={{ fontSize: 13, fontWeight: 800, color: "#aaa", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{progress}%</div>
-          <button onClick={saveToNotion} disabled={saving} style={{
-            flex: 1, background: saving ? "#2a0a0a" : saveStatus === "success" ? "#0a2a0a" : "#e8192c",
-            borderRadius: 10, border: "none",
-            color: saving ? "#888" : saveStatus === "success" ? "#4caf50" : "#fff",
-            fontSize: 13, fontWeight: 900, letterSpacing: "0.08em", padding: "15px 0",
-            cursor: saving ? "not-allowed" : "pointer", transition: "all 0.2s", fontFamily: "inherit"
-          }}>
-            {saving ? "SAVING..." : saveStatus === "success" ? "✓ SAVED TO NOTION" : saveStatus === "error" ? "RETRY — TAP TO SEE ERROR" : "SAVE TO NOTION"}
-          </button>
-        </div>
-      </div>
+          <div style={{ marginTop: 16 }}>
+            <HistoryTab />
+          </div>
+          {/* Tab Bar */}
+          <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#080808", borderTop: "1px solid #222", maxWidth: 480, margin: "0 auto", display: "flex" }}>
+            <button onClick={() => setTab("train")} style={{ flex: 1, padding: "14px 0 18px", background: "transparent", border: "none", color: tab === "train" ? "#e8192c" : "#555", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit" }}>TRAIN</button>
+            <button onClick={() => setTab("history")} style={{ flex: 1, padding: "14px 0 18px", background: "transparent", border: "none", color: tab === "history" ? "#e8192c" : "#555", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit" }}>HISTORY</button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
