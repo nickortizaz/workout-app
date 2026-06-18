@@ -8,7 +8,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const NOTION_TOKEN = process.env.NOTION_TOKEN;
-  const DATABASE_ID  = '1b298096-b9c2-4b34-829b-150b7e11e6e7';
+  const DATABASE_ID  = '40ad8b51-2ff2-4aa3-ac77-5bf82e34b4d9';
 
   if (!NOTION_TOKEN) {
     return res.status(500).json({ error: 'NOTION_TOKEN is not set in Vercel environment variables.' });
