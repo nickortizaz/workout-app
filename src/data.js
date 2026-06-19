@@ -8,15 +8,15 @@ export const DEFAULT_PROGRAM = [
     focus: "Upper Chest / Side Delts / Tricep Mass",
     tags: ["20 MIN CARDIO", "SAUNA"],
     exercises: [
-      { name: "Incline DB Press", sets: 5, reps: "5–8", repLow: 5, repHigh: 8, heavy: true, muscles: ["Chest", "Shoulders"] },
+      { name: "Incline DB Press", sets: 5, reps: "5–8", repLow: 5, repHigh: 8, heavy: true, muscles: ["Chest", "Shoulders"], rest: 150 },
       { name: "Machine Incline Press", sets: 4, reps: "8–12", repLow: 8, repHigh: 12, muscles: ["Chest"] },
       { name: "Low-to-High Cable Fly", sets: 3, reps: "12–15", repLow: 12, repHigh: 15, muscles: ["Chest"] },
       { name: "Flat Pec Deck", sets: 3, reps: "10–12", repLow: 10, repHigh: 12, muscles: ["Chest"] },
       { name: "Atlantis Shoulder Press", sets: 4, reps: "8–10", repLow: 8, repHigh: 10, heavy: true, muscles: ["Shoulders"] },
-      { name: "DB Lateral Raise", sets: 4, reps: "15–20", repLow: 15, repHigh: 20, muscles: ["Shoulders"] },
+      { name: "DB Lateral Raise", sets: 4, reps: "15–20", repLow: 15, repHigh: 20, muscles: ["Shoulders"], rest: 60 },
       { name: "Lean-Away Cable Lateral Raise", sets: 3, reps: "12–15 ea", repLow: 12, repHigh: 15, muscles: ["Shoulders"] },
       { name: "Overhead Rope Tricep Ext", sets: 4, reps: "10–15", repLow: 10, repHigh: 15, muscles: ["Triceps"] },
-      { name: "Dip Machine / Close-Grip", sets: 3, reps: "8–12", repLow: 8, repHigh: 12, muscles: ["Triceps"] },
+      { name: "Dip Machine / Close-Grip", sets: 3, reps: "8–12", repLow: 8, repHigh: 12, muscles: ["Triceps"], rest: 90 },
     ],
   },
   {
@@ -24,7 +24,7 @@ export const DEFAULT_PROGRAM = [
     focus: "Lat Width / Back Thickness / Traps / Biceps",
     tags: ["20 MIN CARDIO", "SAUNA"],
     exercises: [
-      { name: "Wide-Grip Lat Pulldown", sets: 5, reps: "6–10", repLow: 6, repHigh: 10, heavy: true, muscles: ["Back"] },
+      { name: "Wide-Grip Lat Pulldown", sets: 5, reps: "6–10", repLow: 6, repHigh: 10, heavy: true, muscles: ["Back"], rest: 120 },
       { name: "Chest-Supported Row (flared)", sets: 4, reps: "8–12", repLow: 8, repHigh: 12, muscles: ["Back"] },
       { name: "Single-Arm Cable Lat Pulldown", sets: 3, reps: "10–12 ea", repLow: 10, repHigh: 12, muscles: ["Back"] },
       { name: "Chest-Supported High Row", sets: 3, reps: "10–12", repLow: 10, repHigh: 12, muscles: ["Back"] },
@@ -46,8 +46,8 @@ export const DEFAULT_PROGRAM = [
     tags: ["20 MIN CARDIO", "SAUNA", "NO YOHIMBINE"],
     exercises: [
       { name: "Seated / Lying Leg Curl", sets: 4, reps: "10–15", repLow: 10, repHigh: 15, muscles: ["Hamstrings"] },
-      { name: "Romanian Deadlift — DB/Smith", sets: 4, reps: "8–10", repLow: 8, repHigh: 10, muscles: ["Hamstrings", "Glutes"] },
-      { name: "Belt Squat", sets: 5, reps: "6–10", repLow: 6, repHigh: 10, heavy: true, muscles: ["Legs"] },
+      { name: "Romanian Deadlift — DB/Smith", sets: 4, reps: "8–10", repLow: 8, repHigh: 10, muscles: ["Hamstrings", "Glutes"], rest: 150 },
+      { name: "Belt Squat", sets: 5, reps: "6–10", repLow: 6, repHigh: 10, heavy: true, muscles: ["Legs"], rest: 180 },
       { name: "Bulgarian Split Squat", sets: 3, reps: "10–12 ea", repLow: 10, repHigh: 12, muscles: ["Legs", "Glutes"] },
       { name: "Leg Press — feet higher", sets: 4, reps: "10–15", repLow: 10, repHigh: 15, muscles: ["Legs", "Glutes"] },
       { name: "Hip Thrust / Glute Drive", sets: 4, reps: "8–12", repLow: 8, repHigh: 12, muscles: ["Glutes"] },
@@ -60,13 +60,13 @@ export const DEFAULT_PROGRAM = [
     focus: "Full Delt Roundness / Arm Size / Thickness",
     tags: ["20 MIN CARDIO", "SAUNA"],
     exercises: [
-      { name: "Machine OHP", sets: 5, reps: "5–8", repLow: 5, repHigh: 8, heavy: true, muscles: ["Shoulders"] },
-      { name: "DB Lateral Raise", sets: 4, reps: "15–20", repLow: 15, repHigh: 20, muscles: ["Shoulders"] },
+      { name: "Machine OHP", sets: 5, reps: "5–8", repLow: 5, repHigh: 8, heavy: true, muscles: ["Shoulders"], rest: 150 },
+      { name: "DB Lateral Raise", sets: 4, reps: "15–20", repLow: 15, repHigh: 20, muscles: ["Shoulders"], rest: 60 },
       { name: "Lean-Away Cable Lateral Raise", sets: 3, reps: "12–15 ea", repLow: 12, repHigh: 15, muscles: ["Shoulders"] },
       { name: "Reverse Pec Deck", sets: 3, reps: "15–20", repLow: 15, repHigh: 20, muscles: ["Rear Delts"] },
       { name: "Overhead Rope Tricep Ext", sets: 4, reps: "10–15", repLow: 10, repHigh: 15, muscles: ["Triceps"] },
       { name: "Rope Tricep Pushdown", sets: 3, reps: "12–15", repLow: 12, repHigh: 15, muscles: ["Triceps"] },
-      { name: "Dip Machine", sets: 3, reps: "8–12", repLow: 8, repHigh: 12, muscles: ["Triceps"] },
+      { name: "Dip Machine", sets: 3, reps: "8–12", repLow: 8, repHigh: 12, muscles: ["Triceps"], rest: 90 },
       { name: "DB Curl / EZ Bar Curl", sets: 4, reps: "8–12", repLow: 8, repHigh: 12, muscles: ["Biceps"] },
       { name: "Incline DB Curl", sets: 3, reps: "10–12", repLow: 10, repHigh: 12, muscles: ["Biceps"] },
       { name: "Hammer Curl", sets: 3, reps: "10–12", repLow: 10, repHigh: 12, muscles: ["Biceps"] },
@@ -85,7 +85,7 @@ export const DEFAULT_PROGRAM = [
       { name: "Cable Lateral Raise", sets: 4, reps: "15–20 ea", repLow: 15, repHigh: 20, muscles: ["Shoulders"] },
       { name: "Machine Shrug", sets: 3, reps: "10–15", repLow: 10, repHigh: 15, muscles: ["Traps"] },
       { name: "Cable Crunch / Ab Wheel", sets: 4, reps: "12–15", repLow: 12, repHigh: 15, muscles: ["Abs"] },
-      { name: "Hanging Knee / Rev Crunch", sets: 3, reps: "10–15", repLow: 10, repHigh: 15, muscles: ["Abs"] },
+      { name: "Hanging Knee / Rev Crunch", sets: 3, reps: "10–15", repLow: 10, repHigh: 15, muscles: ["Abs"], bodyweight: true, rest: 60 },
     ],
   },
   {
@@ -118,6 +118,26 @@ export const est1RM = (weight, reps) => {
   if (r === 1) return w;
   return Math.round(w * (1 + r / 30));
 };
+
+
+// Plate math — standard lbs plates, two sides of a 45lb bar by default
+export const PLATES = [45, 35, 25, 10, 5, 2.5];
+export const calcPlates = (target, barWeight = 45) => {
+  const perSide = (parseFloat(target) - barWeight) / 2;
+  if (isNaN(perSide) || perSide <= 0) return null;
+  let remaining = perSide;
+  const result = [];
+  for (const p of PLATES) {
+    let count = 0;
+    while (remaining >= p - 0.01) { remaining -= p; count++; }
+    if (count > 0) result.push({ plate: p, count });
+  }
+  return { perSide, plates: result, leftover: Math.round(remaining * 10) / 10 };
+};
+
+// Quick increment options
+export const WEIGHT_INCREMENTS = [-10, -5, 5, 10];
+export const REST_OPTIONS = [60, 90, 120, 150, 180];
 
 export const fmtTime = (s) => `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
 export const fmtDate = (d) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
