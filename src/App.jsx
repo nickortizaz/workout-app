@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   DEFAULT_PROGRAM, ENERGY_LABELS, ENERGY_NOTION, ENERGY_COLORS, DAY_COLORS,
-  getLS, setLS, calcVolume, est1RM, fmtTime, fmtDate, haptic
+  getLS, setLS, calcVolume, est1RM, fmtTime, fmtDate, haptic,
+  calcPlates, WEIGHT_INCREMENTS, REST_OPTIONS
 } from "./data";
 
 const today = new Date().toISOString().split("T")[0];
@@ -34,6 +35,14 @@ export default function App() {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [sessionStart, setSessionStart] = useState(null);
   const [autoRest, setAutoRest] = useState(() => getLS("auto_rest") ?? true);
+  const [defaultRest, setDefaultRest] = useState(() => getLS("default_rest") ?? 90);
+  const [restOverrides, setRestOverrides] = useState(() => getLS("rest_overrides") || {});
+  const [showSettings, setShowSettings] = useState(false);
+  const [plateModal, setPlateModal] = useState(null);
+  const [barWeight, setBarWeight] = useState(() => getLS("bar_weight") ?? 45);
+  const [summary, setSummary] = useState(null);
+  const [pageIds, setPageIds] = useState(() => getLS("notion_page_ids") || {});
+  const [deletingNotion, setDeletingNotion] = useState(false);
   const saveTimer = useRef(null);
   const restRef = useRef(null);
 
@@ -106,7 +115,7 @@ export default function App() {
         const prevPR = getPR(exName);
         if (newE > prevPR && prevPR > 0) { setPrFlash({ ex: exName, e1rm: newE }); haptic([60,40,60,40,120]); setTimeout(() => setPrFlash(null), 2600); }
         else { haptic(25); }
-        if (autoRest && field === "reps") startRest(restTotal);
+        if (autoRest && field === "reps") startRest(getRestFor(exName));
       }
       return next;
     });
@@ -134,6 +143,12 @@ export default function App() {
     haptic(40);
   };
 
+  const getRestFor = (exName) => {
+    if (restOverrides[exName]) return restOverrides[exName];
+    const ex = workout.exercises?.find(e => e.name === exName);
+    if (ex?.rest) return ex.rest;
+    return defaultRest;
+  };
   const startRest = (seconds) => { setRestSeconds(seconds); setRestTotal(seconds); setRestTimer(Date.now()); };
   const handleEnergy = (v) => { setEnergy(v); persist(sets, v, bodyweight, notes, sessionStart); };
   const handleBW = (v) => { setBodyweight(v); persist(sets, energy, v, notes, sessionStart); };
@@ -209,6 +224,8 @@ export default function App() {
   const moveEx = (from, to) => { if (to < 0 || to >= editProgram[selectedDay].exercises.length) return; setEditProgram(p => { const np = JSON.parse(JSON.stringify(p)); const [m] = np[selectedDay].exercises.splice(from, 1); np[selectedDay].exercises.splice(to, 0, m); return np; }); };
 
   // ── SAVE / SYNC ──
+  const pageKey = (entry) => `${entry.date}:${entry.dayIndex}`;
+
   function buildEntry(syncedFlag) {
     const dateLabel = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     const duration = sessionStart ? Math.round((Date.now() - sessionStart) / 60000) : null;
@@ -233,12 +250,20 @@ export default function App() {
       if (!filled.length) return;
       exerciseText += `${name}: ` + filled.map((s, i) => `${s.warmup ? "(W) " : ""}Set ${i+1}: ${s.weight||"—"} × ${s.reps||"—"}`).join(" | ") + "\n";
     });
+    const ids = getLS("notion_page_ids") || {};
+    const existingPageId = ids[pageKey(entry)] || null;
     const res = await fetch("/api/save-workout", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionName: entry.sessionName, dayType: entry.dayType, date: entry.date, energy: entry.energy ? ENERGY_NOTION[entry.energy] : null, bodyweight: entry.bodyweight || null, notes: entry.notes || null, exerciseText, duration: entry.duration }),
+      body: JSON.stringify({ sessionName: entry.sessionName, dayType: entry.dayType, date: entry.date, energy: entry.energy ? ENERGY_NOTION[entry.energy] : null, bodyweight: entry.bodyweight || null, notes: entry.notes || null, exerciseText, duration: entry.duration, existingPageId }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+    // store page id to prevent duplicates + enable two-way delete
+    if (data.page_id) {
+      const newIds = { ...(getLS("notion_page_ids") || {}), [pageKey(entry)]: data.page_id };
+      setLS("notion_page_ids", newIds);
+      setPageIds(newIds);
+    }
     return data;
   }
 
@@ -247,17 +272,25 @@ export default function App() {
     try {
       const entry = saveLocal(false);
       await pushToNotion(entry);
-      // mark synced
       const h = getLS("session_history") || [];
       const updated = h.map(x => (x.date === entry.date && x.dayIndex === entry.dayIndex) ? { ...x, synced: true } : x);
       setLS("session_history", updated);
       setHistory(updated.sort((a, b) => new Date(b.date) - new Date(a.date)));
+      // Build workout summary card
+      const prs = [];
+      Object.entries(entry.sets).forEach(([name, es]) => {
+        (es || []).forEach(s => { if (s?.weight && s?.reps && !s?.warmup) { /* PR already flashed live */ } });
+      });
+      let hardestSet = null, hardestVol = 0;
+      Object.entries(entry.sets).forEach(([name, es]) => {
+        (es || []).forEach(s => { if (s?.weight && s?.reps && !s?.warmup) { const v = parseFloat(s.weight) * parseFloat(s.reps); if (v > hardestVol) { hardestVol = v; hardestSet = `${name} — ${s.weight} × ${s.reps}`; } } });
+      });
+      setSummary({ name: entry.name, volume: entry.volume, duration: entry.duration, hardestSet, energy: entry.energy });
       setSaveStatus("success");
     } catch (err) { setSaveStatus("error"); setSaveError(err.message || "Network error"); }
     setSaving(false);
   }
 
-  // Sync all unsynced sessions
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
   async function syncAll() {
@@ -266,15 +299,11 @@ export default function App() {
     const unsynced = h.filter(x => !x.synced && x.volume > 0);
     if (!unsynced.length) { setSyncMsg("All sessions already synced"); setSyncing(false); setTimeout(() => setSyncMsg(null), 2500); return; }
     let ok = 0, fail = 0;
+    const syncedKeys = [];
     for (const entry of unsynced) {
-      try { await pushToNotion(entry); ok++; } catch { fail++; }
+      try { await pushToNotion(entry); ok++; syncedKeys.push(`${entry.date}:${entry.dayIndex}`); } catch { fail++; }
     }
-    const updated = h.map(x => unsynced.find(u => u.date === x.date && u.dayIndex === x.dayIndex) && !fail ? { ...x, synced: true } : (unsynced.find(u => u.date === x.date && u.dayIndex === x.dayIndex) && ok > 0 ? { ...x, synced: true } : x));
-    // Simpler: re-mark all attempted as synced if they succeeded — mark the ones we know
-    const finalHist = h.map(x => {
-      const wasUnsynced = unsynced.find(u => u.date === x.date && u.dayIndex === x.dayIndex);
-      return wasUnsynced && fail === 0 ? { ...x, synced: true } : x;
-    });
+    const finalHist = h.map(x => syncedKeys.includes(`${x.date}:${x.dayIndex}`) ? { ...x, synced: true } : x);
     setLS("session_history", finalHist);
     setHistory(finalHist.sort((a, b) => new Date(b.date) - new Date(a.date)));
     setSyncMsg(fail ? `${ok} synced, ${fail} failed` : `${ok} session${ok>1?"s":""} synced`);
@@ -282,15 +311,24 @@ export default function App() {
     setTimeout(() => setSyncMsg(null), 3000);
   }
 
-  // Delete / edit history
-  function deleteSession(entry) {
+  // Two-way delete: removes from app AND archives in Notion if we have the page id
+  async function deleteSession(entry) {
+    setDeletingNotion(true);
+    const key = `${entry.date}:${entry.dayIndex}`;
+    const ids = getLS("notion_page_ids") || {};
+    const pageId = ids[key];
+    if (pageId) {
+      try { await fetch("/api/delete-workout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pageId }) }); } catch {}
+      delete ids[key];
+      setLS("notion_page_ids", ids); setPageIds(ids);
+    }
     const h = getLS("session_history") || [];
     const updated = h.filter(x => !(x.date === entry.date && x.dayIndex === entry.dayIndex));
     setLS("session_history", updated);
     setHistory(updated.sort((a, b) => new Date(b.date) - new Date(a.date)));
     const last = getLS(`last_session:${entry.dayIndex}`);
     if (last && last.date === entry.date) setLS(`last_session:${entry.dayIndex}`, null);
-    setConfirmDelete(null); setExpandedHistory(null);
+    setConfirmDelete(null); setExpandedHistory(null); setDeletingNotion(false);
     haptic(40);
   }
 
@@ -372,12 +410,103 @@ export default function App() {
     );
   };
 
+  const PlateModal = () => {
+    if (!plateModal) return null;
+    const result = calcPlates(plateModal.weight, barWeight);
+    return (
+      <div onClick={() => setPlateModal(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 115, display: "flex", alignItems: "flex-end" }}>
+        <div onClick={e => e.stopPropagation()} style={{ background: "#0e0e0e", width: "100%", maxWidth: 480, margin: "0 auto", borderRadius: "20px 20px 0 0", border: "1px solid #222", padding: "20px 18px 32px" }}>
+          <div style={{ width: 40, height: 4, background: "#333", borderRadius: 2, margin: "0 auto 18px" }} />
+          <div style={{ fontSize: 18, fontWeight: 900 }}>Plate Math</div>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 18 }}>{plateModal.ex} · {plateModal.weight || "—"} lbs total</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
+            <span style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>Bar weight:</span>
+            {[45, 35, 0].map(b => <button key={b} onClick={() => { setBarWeight(b); setLS("bar_weight", b); }} style={{ background: barWeight === b ? "#e8192c" : "#161616", border: `1px solid ${barWeight === b ? "#e8192c" : "#2a2a2a"}`, borderRadius: 6, color: "#fff", fontSize: 12, fontWeight: 700, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>{b === 0 ? "None" : `${b} lb`}</button>)}
+          </div>
+          {!result ? (
+            <div style={{ fontSize: 14, color: "#888", padding: "20px 0", textAlign: "center" }}>Enter a weight above the bar weight to see plates.</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 13, color: "#aaa", marginBottom: 14, fontWeight: 600 }}>Load per side ({result.perSide} lbs):</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: result.leftover > 0 ? 12 : 0 }}>
+                {result.plates.map(p => (
+                  <div key={p.plate} style={{ background: "#1a1a1a", border: "1px solid #333", borderRadius: 8, padding: "10px 16px", display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 22, fontWeight: 900, color: "#e8192c" }}>{p.count}</span>
+                    <span style={{ fontSize: 12, color: "#aaa", fontWeight: 600 }}>× {p.plate}</span>
+                  </div>
+                ))}
+              </div>
+              {result.leftover > 0 && <div style={{ fontSize: 12, color: "#ff6b2b", fontWeight: 600 }}>{result.leftover} lbs/side can't be matched with standard plates</div>}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const SettingsSheet = () => showSettings && (
+    <div onClick={() => setShowSettings(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 115, display: "flex", alignItems: "flex-end" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#0e0e0e", width: "100%", maxWidth: 480, margin: "0 auto", borderRadius: "20px 20px 0 0", border: "1px solid #222", padding: "20px 18px 32px", maxHeight: "82vh", overflowY: "auto" }}>
+        <div style={{ width: 40, height: 4, background: "#333", borderRadius: 2, margin: "0 auto 18px" }} />
+        <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 20 }}>Settings</div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>Auto rest timer</span>
+          <span onClick={() => { const v = !autoRest; setAutoRest(v); setLS("auto_rest", v); }} style={{ width: 44, height: 24, borderRadius: 12, background: autoRest ? "#4caf50" : "#333", position: "relative", cursor: "pointer" }}>
+            <span style={{ position: "absolute", top: 2, left: autoRest ? 22 : 2, width: 20, height: 20, borderRadius: 10, background: "#fff", transition: "all .2s" }} />
+          </span>
+        </div>
+
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Default rest length</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {REST_OPTIONS.map(r => <button key={r} onClick={() => { setDefaultRest(r); setLS("default_rest", r); }} style={{ background: defaultRest === r ? "#e8192c" : "#161616", border: `1px solid ${defaultRest === r ? "#e8192c" : "#2a2a2a"}`, borderRadius: 6, color: "#fff", fontSize: 12, fontWeight: 700, padding: "8px 12px", cursor: "pointer", fontFamily: "inherit" }}>{fmtTime(r)}</button>)}
+          </div>
+          <div style={{ fontSize: 11, color: "#666", marginTop: 8 }}>Heavy compounds use their own preset rest automatically.</div>
+        </div>
+
+        <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 18, marginTop: 4 }}>
+          <button onClick={syncAll} disabled={syncing} style={{ width: "100%", background: "#1a1a1a", border: "1px solid #333", borderRadius: 10, color: "#fff", fontSize: 13, fontWeight: 800, padding: "13px 0", cursor: "pointer", fontFamily: "inherit", marginBottom: 10 }}>{syncing ? "SYNCING..." : "⟳ RE-SYNC ALL TO NOTION"}</button>
+          <button onClick={() => { if (confirm("Wipe all local workout data? This cannot be undone. Notion entries stay.")) { ["session_history","notion_page_ids"].forEach(k => localStorage.removeItem(k)); for (let i=0;i<7;i++) localStorage.removeItem(`last_session:${i}`); setHistory([]); setPageIds({}); setShowSettings(false); } }} style={{ width: "100%", background: "#2a0a0a", border: "1px solid #5a1a1a", borderRadius: 10, color: "#e8192c", fontSize: 13, fontWeight: 800, padding: "13px 0", cursor: "pointer", fontFamily: "inherit" }}>WIPE LOCAL DATA</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const SummaryCard = () => summary && (
+    <div onClick={() => setSummary(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.9)", zIndex: 130, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "linear-gradient(160deg,#141414,#0a0a0a)", borderRadius: 18, border: "1px solid #2a2a2a", padding: 28, maxWidth: 360, width: "100%", textAlign: "center" }}>
+        <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: "0.15em", color: "#4caf50", marginBottom: 6 }}>✓ SESSION COMPLETE</div>
+        <div style={{ fontSize: 26, fontWeight: 900, marginBottom: 20 }}>{summary.name}</div>
+        <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 24, fontWeight: 900, color: "#e8192c" }}>{summary.volume ? (summary.volume/1000).toFixed(1) + "k" : "—"}</div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>LBS VOLUME</div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 24, fontWeight: 900, color: "#4fc3f7" }}>{summary.duration || "—"}</div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>MINUTES</div>
+          </div>
+          {summary.energy > 0 && <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 24, fontWeight: 900, color: ENERGY_COLORS[summary.energy] }}>{summary.energy}</div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>ENERGY</div>
+          </div>}
+        </div>
+        {summary.hardestSet && <div style={{ background: "#1a1a1a", borderRadius: 10, padding: "12px 14px", marginBottom: 20 }}>
+          <div style={{ fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em", marginBottom: 4 }}>TOP SET</div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>{summary.hardestSet}</div>
+        </div>}
+        <button onClick={() => setSummary(null)} style={{ width: "100%", background: "#e8192c", border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 800, padding: "14px 0", cursor: "pointer", fontFamily: "inherit" }}>DONE</button>
+      </div>
+    </div>
+  );
+
   const ConfirmDelete = () => confirmDelete && (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 120, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ background: "#0e0e0e", borderRadius: 16, border: "1px solid #2a2a2a", padding: 24, maxWidth: 340, width: "100%" }}>
         <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 8 }}>Delete session?</div>
-        <div style={{ fontSize: 13, color: "#888", marginBottom: 20, lineHeight: 1.5 }}>{confirmDelete.name} on {fmtDate(confirmDelete.date)} will be permanently removed from history. This does not delete it from Notion.</div>
-        <button onClick={() => deleteSession(confirmDelete)} style={{ width: "100%", background: "#e8192c", border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 800, padding: "14px 0", cursor: "pointer", fontFamily: "inherit", marginBottom: 10 }}>DELETE</button>
+        <div style={{ fontSize: 13, color: "#888", marginBottom: 20, lineHeight: 1.5 }}>{confirmDelete.name} on {fmtDate(confirmDelete.date)} will be removed from the app{(getLS("notion_page_ids")||{})[`${confirmDelete.date}:${confirmDelete.dayIndex}`] ? " and moved to trash in Notion (recoverable for 30 days)" : ""}.</div>
+        <button onClick={() => deleteSession(confirmDelete)} disabled={deletingNotion} style={{ width: "100%", background: "#e8192c", border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 800, padding: "14px 0", cursor: "pointer", fontFamily: "inherit", marginBottom: 10 }}>{deletingNotion ? "DELETING..." : "DELETE"}</button>
         <button onClick={() => setConfirmDelete(null)} style={{ width: "100%", background: "#1a1a1a", border: "1px solid #333", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 800, padding: "14px 0", cursor: "pointer", fontFamily: "inherit" }}>CANCEL</button>
       </div>
     </div>
@@ -576,7 +705,10 @@ export default function App() {
         </div>
         {!workout.recovery && (editMode
           ? <button onClick={() => setSavePrompt(true)} style={{ background: "#4caf50", border: "none", borderRadius: 8, color: "#fff", fontSize: 12, fontWeight: 800, padding: "8px 14px", cursor: "pointer", fontFamily: "inherit" }}>DONE</button>
-          : <button onClick={enterEdit} style={{ background: "#1a1a1a", border: "1px solid #333", borderRadius: 8, color: "#bbb", fontSize: 12, fontWeight: 800, padding: "8px 14px", cursor: "pointer", fontFamily: "inherit" }}>EDIT</button>)}
+          : <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={enterEdit} style={{ background: "#1a1a1a", border: "1px solid #333", borderRadius: 8, color: "#bbb", fontSize: 12, fontWeight: 800, padding: "8px 14px", cursor: "pointer", fontFamily: "inherit" }}>EDIT</button>
+              <button onClick={() => setShowSettings(true)} style={{ background: "#1a1a1a", border: "1px solid #333", borderRadius: 8, color: "#bbb", fontSize: 15, padding: "7px 11px", cursor: "pointer", fontFamily: "inherit" }}>⚙</button>
+            </div>)}
       </div>
 
       {editMode && <div style={{ padding: "12px 16px 0" }}><div style={{ background: "#1a1505", border: "1px solid #4a3a0a", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#f5c842", fontWeight: 600 }}>Editing — rename, reorder, swap, add or remove. Tap DONE to save.</div></div>}
@@ -657,13 +789,28 @@ export default function App() {
                     const set = es[si] || { weight: "", reps: "", warmup: false };
                     const lastSet = lastSession[ex.name]?.[si];
                     const setDone = set.weight && set.reps;
+                    const isBW = ex.bodyweight;
+                    const adjustWeight = (delta) => {
+                      const cur = parseFloat(set.weight) || (lastSet?.weight ? parseFloat(lastSet.weight) : 0);
+                      const next = Math.max(0, cur + delta);
+                      updateSet(ex.name, si, "weight", String(next));
+                    };
                     return (
-                      <div key={si} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <button onClick={() => toggleWarmup(ex.name, si)} style={{ width: 20, flexShrink: 0, fontSize: 12, color: set.warmup ? "#f5c842" : setDone ? "#4caf50" : "#999", fontWeight: 800, textAlign: "center", background: "transparent", border: "none", cursor: "pointer", padding: 0 }} title="Tap to toggle warmup">{set.warmup ? "W" : setDone ? "✓" : si + 1}</button>
-                        <div style={{ flex: 1, minWidth: 0 }}><input type="text" inputMode="decimal" placeholder={lastSet?.weight || "—"} value={set.weight || ""} onChange={e => updateSet(ex.name, si, "weight", e.target.value)} style={inputStyle(set.weight, set.warmup)} /></div>
-                        <div style={{ width: 18, flexShrink: 0, textAlign: "center", color: "#fff", fontSize: 16, fontWeight: 700 }}>×</div>
-                        <div style={{ flex: 1, minWidth: 0 }}><input type="text" inputMode="numeric" placeholder={lastSet?.reps || "—"} value={set.reps || ""} onChange={e => updateSet(ex.name, si, "reps", e.target.value)} style={inputStyle(set.reps, set.warmup)} /></div>
-                        <button onClick={() => startRest(restTotal)} style={{ width: 30, flexShrink: 0, height: 38, background: "#161616", border: "1px solid #2a2a2a", borderRadius: 8, color: "#666", fontSize: 13, cursor: "pointer" }} title="Rest timer">⏱</button>
+                      <div key={si}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <button onClick={() => toggleWarmup(ex.name, si)} style={{ width: 20, flexShrink: 0, fontSize: 12, color: set.warmup ? "#f5c842" : setDone ? "#4caf50" : "#999", fontWeight: 800, textAlign: "center", background: "transparent", border: "none", cursor: "pointer", padding: 0 }} title="Tap to toggle warmup">{set.warmup ? "W" : setDone ? "✓" : si + 1}</button>
+                          <div style={{ flex: 1, minWidth: 0 }}><input type="text" inputMode="decimal" placeholder={isBW ? "+0" : (lastSet?.weight || "—")} value={set.weight || ""} onChange={e => updateSet(ex.name, si, "weight", e.target.value)} style={inputStyle(set.weight, set.warmup)} /></div>
+                          <div style={{ width: 18, flexShrink: 0, textAlign: "center", color: "#fff", fontSize: 16, fontWeight: 700 }}>×</div>
+                          <div style={{ flex: 1, minWidth: 0 }}><input type="text" inputMode="numeric" placeholder={lastSet?.reps || "—"} value={set.reps || ""} onChange={e => updateSet(ex.name, si, "reps", e.target.value)} style={inputStyle(set.reps, set.warmup)} /></div>
+                          <button onClick={() => startRest(getRestFor(ex.name))} style={{ width: 30, flexShrink: 0, height: 38, background: "#161616", border: "1px solid #2a2a2a", borderRadius: 8, color: "#666", fontSize: 13, cursor: "pointer" }} title="Rest timer">⏱</button>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, paddingLeft: 26 }}>
+                          {isBW && <span style={{ fontSize: 9, color: "#f5c842", fontWeight: 800, letterSpacing: "0.05em", marginRight: 2 }}>BW{set.weight ? " +" : ""}</span>}
+                          {WEIGHT_INCREMENTS.map(d => (
+                            <button key={d} onClick={() => adjustWeight(d)} style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 5, color: d > 0 ? "#4caf50" : "#ff6b2b", fontSize: 11, fontWeight: 700, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit" }}>{d > 0 ? "+" : ""}{d}</button>
+                          ))}
+                          {!isBW && <button onClick={() => setPlateModal({ ex: ex.name, weight: set.weight || lastSet?.weight || "" })} style={{ marginLeft: "auto", background: "#141414", border: "1px solid #2a2a2a", borderRadius: 5, color: "#4fc3f7", fontSize: 11, fontWeight: 700, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit" }}>⚙ plates</button>}
+                        </div>
                       </div>
                     );
                   })}
@@ -677,18 +824,9 @@ export default function App() {
 
       {workout.recovery && <div style={{ margin: "24px 16px 0", background: "#111", borderRadius: 12, border: "1px solid #333", padding: 32, textAlign: "center" }}><div style={{ fontSize: 30, fontWeight: 900, letterSpacing: "0.06em", color: "#555" }}>REST & RECOVER</div><div style={{ fontSize: 14, color: "#aaa", marginTop: 14, lineHeight: 1.8 }}>No lifting. No pump work.<br />Cardio only + Cold Plunge.<br />Growth happens here.</div></div>}
 
-      {!editMode && <div style={{ padding: "14px 16px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <label style={{ fontSize: 12, color: "#888", fontWeight: 600, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-          <span onClick={() => { const v = !autoRest; setAutoRest(v); setLS("auto_rest", v); }} style={{ width: 40, height: 22, borderRadius: 11, background: autoRest ? "#4caf50" : "#333", position: "relative", transition: "all .2s" }}>
-            <span style={{ position: "absolute", top: 2, left: autoRest ? 20 : 2, width: 18, height: 18, borderRadius: 9, background: "#fff", transition: "all .2s" }} />
-          </span>
-          Auto rest timer
-        </label>
-      </div>}
-
       {!editMode && <div style={{ padding: "12px 16px 0" }}><textarea rows={3} placeholder="Session notes..." value={notes} onChange={e => handleNotes(e.target.value)} style={{ width: "100%", background: "#111", border: "1px solid #333", borderRadius: 10, padding: 14, color: "#fff", fontSize: 14, outline: "none", resize: "none", fontFamily: "inherit", boxSizing: "border-box", lineHeight: 1.6 }} /></div>}
 
-      <RestBar /><ExerciseDetail /><SavePrompt /><SwapModal /><PRFlash />
+      <RestBar /><ExerciseDetail /><SavePrompt /><SwapModal /><PRFlash /><PlateModal /><SettingsSheet /><SummaryCard />
 
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#080808", borderTop: "1px solid #222", maxWidth: 480, margin: "0 auto" }}>
         {!editMode && <>
